@@ -1,0 +1,7 @@
+guided_diffusion/__pycache__/*.pyc
+guided_diffusion/.ipynb_checkpoints/*
+data/*
+results/*
+inference.txt
+
+*.sh
