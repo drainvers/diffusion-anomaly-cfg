@@ -49,7 +49,8 @@ class TrainLoop:
         p_uncond=None,
         guidance_scale=-1,
         num_classes=None,
-        sample_fn=None
+        sample_fn=None,
+        noise_fn=None
     ):
         self.model = model
         self.diffusion = diffusion
@@ -80,6 +81,7 @@ class TrainLoop:
         self.p_uncond = p_uncond
         self.guidance_scale = guidance_scale
         self.num_classes = num_classes # For saving intermediate samples
+        self.noise_fn = noise_fn
 
         self.sync_cuda = th.cuda.is_available()
 

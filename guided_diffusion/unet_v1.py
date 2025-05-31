@@ -683,7 +683,7 @@ class UNetModel(nn.Module):
             if p_uncond != -1:
                 assert p_uncond > 0
                 cemb = self.cond_embed(self.label_emb(y))
-                mask = th.rand(cemb.shape[0]) <= p_uncond
+                mask = th.rand(cemb.shape[0]) < p_uncond
                 cemb[np.where(mask)[0]] = 0
             # Classifier-free sampling
             elif p_uncond == -1 and clf_free:

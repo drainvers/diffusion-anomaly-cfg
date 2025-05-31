@@ -3,7 +3,7 @@ import inspect
 
 from . import gaussian_diffusion as gd
 from .respace import SpacedDiffusion, space_timesteps
-from .unet import UNetModel, EncoderUNetModel
+# from .unet import UNetModel, EncoderUNetModel
 
 
 def diffusion_defaults():
@@ -37,6 +37,7 @@ def classifier_defaults():
         classifier_pool="spatial",
         in_channels=3,
         out_channels=1000,
+        unet_version='v1'
     )
 
 
@@ -63,6 +64,7 @@ def model_and_diffusion_defaults():
         in_channels=3,
         num_classes=2,
         clf_free=True,
+        unet_version='v1'
     )
     res.update(diffusion_defaults())
     return res
@@ -100,7 +102,8 @@ def create_model_and_diffusion(
     use_fp16,
     use_new_attention_order,
     num_classes,
-    clf_free
+    clf_free,
+    unet_version
 ):
     print('timestepresp1',timestep_respacing )
     model = create_model(
@@ -123,6 +126,7 @@ def create_model_and_diffusion(
         use_new_attention_order=use_new_attention_order,
         num_classes=num_classes,
         clf_free=clf_free,
+        unet_version=unet_version
     )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
@@ -156,7 +160,8 @@ def create_model(
     resblock_updown=False,
     use_fp16=False,
     use_new_attention_order=False,
-    clf_free=True
+    clf_free=True,
+    unet_version='v1'
 ):
     if channel_mult == "":
         if image_size == 512:
@@ -182,6 +187,13 @@ def create_model(
         out_channels = in_channels if not learn_sigma else in_channels * 2
     else:
         out_channels = 3 if not learn_sigma else 6
+    
+    if unet_version == 'v1':
+        from .unet_v1 import UNetModel
+    elif unet_version == 'v2':
+        from .unet_v2 import UNetModel
+    else:
+        raise ValueError(f"invalid unet version: {unet_version}")
 
     print('in_channels', in_channels)
       
@@ -227,6 +239,7 @@ def create_classifier_and_diffusion(
     rescale_learned_sigmas,
     in_channels=1,
     out_channels=1000,
+    unet_version='v1'
 ):
     print('timestepresp2', timestep_respacing)
     classifier = create_classifier(
@@ -239,7 +252,8 @@ def create_classifier_and_diffusion(
         classifier_resblock_updown,
         classifier_pool,
         in_channels,
-        out_channels
+        out_channels,
+        unet_version
     )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
@@ -265,6 +279,7 @@ def create_classifier(
     classifier_pool,
     in_channels=3,
     out_channels=1000,
+    unet_version='v1'
 ):
     if image_size == 512:
         channel_mult = (0.5, 1, 1, 2, 2, 4, 4)
@@ -282,6 +297,13 @@ def create_classifier(
     attention_ds = []
     for res in classifier_attention_resolutions.split(","):
         attention_ds.append(image_size // int(res))
+    
+    if unet_version == 'v1':
+        from .unet_v1 import EncoderUNetModel
+    elif unet_version == 'v2':
+        from .unet_v2 import EncoderUNetModel
+    else:
+        raise ValueError(f"invalid unet version: {unet_version}")
 
     print('in_channels classifier', in_channels)
       

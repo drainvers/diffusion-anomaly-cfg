@@ -67,10 +67,12 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     support it as an extra input.
     """
 
-    def forward(self, x, emb):
+    def forward(self, x, emb, encoder_out=None):
         for layer in self:
             if isinstance(layer, TimestepBlock):
                 x = layer(x, emb)
+            elif isinstance(layer, AttentionBlock):
+                x = layer(x, encoder_out)
             else:
                 x = layer(x)
         return x
@@ -272,7 +274,8 @@ class AttentionBlock(nn.Module):
         num_heads=1,
         num_head_channels=-1,
         use_checkpoint=False,
-        use_new_attention_order=False
+        use_new_attention_order=False,
+        encoder_channels=None,
     ):
         super().__init__()
         self.channels = channels
@@ -293,20 +296,28 @@ class AttentionBlock(nn.Module):
             # split heads before split qkv
             self.attention = QKVAttentionLegacy(self.num_heads)
 
+        if encoder_channels is not None:
+            self.encoder_kv = conv_nd(1, encoder_channels, channels * 2, 1)
         self.proj_out = zero_module(conv_nd(1, channels, channels, 1))
 
-    def forward(self, x):
-        return checkpoint(self._forward, (x,), self.parameters(), True)
+    def forward(self, x, encoder_out=None):
+        return checkpoint(self._forward, (x, encoder_out,), self.parameters(), True)
 
-    def _forward(self, x):
+    def _forward(self, x, encoder_out=None):
         b, c, *spatial = x.shape
         x = x.reshape(b, c, -1)
         qkv = self.qkv(self.norm(x))
-        h = self.attention(qkv)
+
+        if encoder_out is not None:
+            encoder_out_expand = self.encoder_kv(encoder_out)
+            h = self.attention(qkv, encoder_out_expand) 
+        else:
+            h = self.attention(qkv)
+        
         h = self.proj_out(h)
         return (x + h).reshape(b, c, *spatial)
 
-
+'''
 def count_flops_attn(model, _x, y):
     """
     A counter for the `thop` package to count the operations in an
@@ -325,7 +336,34 @@ def count_flops_attn(model, _x, y):
     # the combination of the value vectors.
     matmul_ops = 2 * b * (num_spatial ** 2) * c
     model.total_ops += th.DoubleTensor([matmul_ops])
+'''
 
+def count_flops_attn(model, _x, y):
+    """
+    A counter for the `thop` package to count the operations in an
+    attention operation.
+    Supports optional encoder attention (cross-attention).
+    """
+    # y is expected to be a tuple: (output,)
+    output = y[0]  # attention output
+    b, c, *spatial = output.shape
+    T_q = int(np.prod(spatial))
+
+    # Try to infer T_kv from model or encoder_kv
+    if hasattr(model, 'encoder_kv') and model.encoder_kv is not None:
+        """
+        If encoder_kv was used, we don't have direct access to its shape here,
+        but we can approximate T_kv as T_q + T_enc
+        Instead, we could optionally store it in model.temp_t_kv or pass as part of y
+        For now, assume worst case where T_kv = 2 * T_q
+        """
+        T_kv = 2 * T_q
+    else:
+        T_kv = T_q
+
+    # FLOPs: 2 matmuls of (B * H * T_q * C * T_kv)
+    matmul_ops = 2 * b * T_q * T_kv * c
+    model.total_ops += th.DoubleTensor([matmul_ops])
 
 class QKVAttentionLegacy(nn.Module):
     """
@@ -336,7 +374,7 @@ class QKVAttentionLegacy(nn.Module):
         super().__init__()
         self.n_heads = n_heads
 
-    def forward(self, qkv):
+    def forward(self, qkv, encoder_kv=None):
         """
         Apply QKV attention.
 
@@ -348,6 +386,13 @@ class QKVAttentionLegacy(nn.Module):
         assert width % (3 * self.n_heads) == 0
         ch = width // (3 * self.n_heads)
         q, k, v = qkv.reshape(bs * self.n_heads, ch * 3, length).split(ch, dim=1)
+
+        if encoder_kv is not None:
+            assert encoder_kv.shape[1] == self.n_heads * ch * 2
+            ek, ev = encoder_kv.reshape(bs * self.n_heads, ch * 2, -1).split(ch, dim=1)
+            k = th.cat([ek, k], dim=-1)
+            v = th.cat([ev, v], dim=-1)
+
         scale = 1 / math.sqrt(math.sqrt(ch))
         weight = th.einsum(
             "bct,bcs->bts", q * scale, k * scale
@@ -370,7 +415,7 @@ class QKVAttention(nn.Module):
         super().__init__()
         self.n_heads = n_heads
 
-    def forward(self, qkv):
+    def forward(self, qkv, encoder_kv=None):
         """
         Apply QKV attention.
 
@@ -382,6 +427,18 @@ class QKVAttention(nn.Module):
         assert width % (3 * self.n_heads) == 0
         ch = width // (3 * self.n_heads)
         q, k, v = qkv.chunk(3, dim=1)
+
+        if encoder_kv is not None:
+            # encoder_kv: [N x (2 * H * C) x T_enc]
+            assert encoder_kv.shape[1] == 2 * self.n_heads * ch
+            ek, ev = encoder_kv.chunk(2, dim=1)
+            ek = ek.view(bs * self.n_heads, ch, -1)
+            ev = ev.view(bs * self.n_heads, ch, -1)
+
+            # Concatenate encoder and decoder keys/values along the time axis
+            k = th.cat([ek, k], dim=-1)  # [B*H, C, T_enc + T]
+            v = th.cat([ev, v], dim=-1)
+
         scale = 1 / math.sqrt(math.sqrt(ch))
         weight = th.einsum(
             "bct,bcs->bts",
@@ -474,6 +531,7 @@ class UNetModel(nn.Module):
         self.num_heads_upsample = num_heads_upsample
 
         time_embed_dim = model_channels * 4
+        encoder_channels = time_embed_dim
 
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
@@ -481,27 +539,26 @@ class UNetModel(nn.Module):
             linear(time_embed_dim, time_embed_dim),
         )
 
-        if self.num_classes is not None:
-            if clf_free:
-                self.label_emb = nn.Embedding(num_classes, model_channels)
-                self.cond_embed = nn.Sequential(
-                    linear(model_channels, time_embed_dim),
-                    nn.SiLU(),
-                    linear(time_embed_dim, time_embed_dim)
-                )
-            else:
-                self.label_emb = nn.Embedding(num_classes, time_embed_dim)
+        if self.num_classes is not None and clf_free:
+            self.label_emb = nn.Embedding(self.num_classes, model_channels)
+            self.cond_embed = nn.Sequential(
+                linear(model_channels, time_embed_dim),
+                nn.SiLU(),
+                linear(time_embed_dim, time_embed_dim)
+            )
+        elif self.num_classes is not None and not clf_free:
+            self.label_emb = nn.Embedding(self.num_classes, time_embed_dim)
 
+        ch = input_ch = int(channel_mult[0] * model_channels)
         self.input_blocks = nn.ModuleList(
             [
                 TimestepEmbedSequential(
-                    conv_nd(dims, in_channels, model_channels, 3, padding=1)
+                    conv_nd(dims, self.in_channels, ch, 3, padding=1)
                 )
             ]
         )
-        self._feature_size = model_channels
-        input_block_chans = [model_channels]
-        ch = model_channels
+        self._feature_size = ch
+        input_block_chans = [ch]
         ds = 1
         for level, mult in enumerate(channel_mult):
             for _ in range(num_res_blocks):
@@ -510,13 +567,13 @@ class UNetModel(nn.Module):
                         ch,
                         time_embed_dim,
                         dropout,
-                        out_channels=mult * model_channels,
+                        out_channels=int(mult * model_channels),
                         dims=dims,
                         use_checkpoint=use_checkpoint,
                         use_scale_shift_norm=use_scale_shift_norm
                     )
                 ]
-                ch = mult * model_channels
+                ch = int(mult * model_channels)
                 if ds in attention_resolutions:
                     layers.append(
                         AttentionBlock(
@@ -525,6 +582,7 @@ class UNetModel(nn.Module):
                             num_heads=num_heads,
                             num_head_channels=num_head_channels,
                             use_new_attention_order=use_new_attention_order,
+                            encoder_channels=encoder_channels,
                         )
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
@@ -570,6 +628,7 @@ class UNetModel(nn.Module):
                 num_heads=num_heads,
                 num_head_channels=num_head_channels,
                 use_new_attention_order=use_new_attention_order,
+                encoder_channels=encoder_channels,
             ),
             ResBlock(
                 ch,
@@ -591,7 +650,7 @@ class UNetModel(nn.Module):
                         ch + ich,
                         time_embed_dim,
                         dropout,
-                        out_channels=model_channels * mult,
+                        out_channels=int(model_channels * mult),
                         dims=dims,
                         use_checkpoint=use_checkpoint,
                         use_scale_shift_norm=use_scale_shift_norm,
@@ -606,6 +665,7 @@ class UNetModel(nn.Module):
                             num_heads=num_heads_upsample,
                             num_head_channels=num_head_channels,
                             use_new_attention_order=use_new_attention_order,
+                            encoder_channels=encoder_channels,
                         )
                     )
                 if level and i == num_res_blocks:
@@ -631,7 +691,7 @@ class UNetModel(nn.Module):
         self.out = nn.Sequential(
             normalization(ch),
             nn.SiLU(),
-            zero_module(conv_nd(dims, model_channels, out_channels, 3, padding=1)),
+            zero_module(conv_nd(dims, input_ch, out_channels, 3, padding=1)),
         )
 
     def convert_to_fp16(self):
@@ -685,35 +745,38 @@ class UNetModel(nn.Module):
                 cemb = self.cond_embed(self.label_emb(y))
                 mask = th.rand(cemb.shape[0]) <= p_uncond
                 cemb[np.where(mask)[0]] = 0
+                cemb_mm = th.einsum("ab,ac -> abc", cemb, cemb)
             # Classifier-free sampling
             elif p_uncond == -1 and clf_free:
                 if null:
                     cemb = th.zeros_like(emb)
                 else: # Class cond embedding
                     cemb = self.cond_embed(self.label_emb(y))
+                cemb_mm = th.einsum("ab,ac -> abc", cemb, cemb)
             # for non-clf-free condition embedding, e.g., classifier guided sampling
-            elif p_uncond == -1 and not clf_free:
-                cemb = self.label_emb(y)
+            # elif p_uncond == -1 and not clf_free:
+            #     cemb = self.label_emb(y)
             else:
                 raise Exception("Invalid conditioning configuration")
             
             assert cemb is not None
+            assert cemb_mm is not None
             emb += cemb
 
         h = x.type(self.dtype)
         for module in self.input_blocks:
-            h = module(h, emb)
+            h = module(h, emb, cemb_mm)
             hs.append(h)
-        h = self.middle_block(h, emb)
+        h = self.middle_block(h, emb, cemb_mm)
         for module in self.output_blocks:
             h = th.cat([h, hs.pop()], dim=1)
-            h = module(h, emb)
+            h = module(h, emb, cemb_mm)
         h = h.type(x.dtype)
 
         assert len(hs) == 0
         return self.out(h)
 
-
+'''
 class SuperResModel(UNetModel):
     """
     A UNetModel that performs super-resolution.
@@ -729,7 +792,7 @@ class SuperResModel(UNetModel):
         upsampled = F.interpolate(low_res, (new_height, new_width), mode="bilinear")
         x = th.cat([x, upsampled], dim=1)
         return super().forward(x, timesteps, **kwargs)
-
+'''
 
 class EncoderUNetModel(nn.Module):
     """
@@ -821,6 +884,7 @@ class EncoderUNetModel(nn.Module):
                             num_heads=num_heads,
                             num_head_channels=num_head_channels,
                             use_new_attention_order=use_new_attention_order,
+                            encoder_channels=encoder_channels,
                         )
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
@@ -866,6 +930,7 @@ class EncoderUNetModel(nn.Module):
                 num_heads=num_heads,
                 num_head_channels=num_head_channels,
                 use_new_attention_order=use_new_attention_order,
+                encoder_channels=encoder_channels,
             ),
             ResBlock(
                 ch,

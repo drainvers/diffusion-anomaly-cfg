@@ -56,13 +56,13 @@ def main():
             shuffle=True)
 
     elif args.dataset == 'chexpert':
-        ds = ChexpertDataset(args.data_dir, class_cond=True, test_flag=False, sample_n=20000)
+        ds = ChexpertDataset(args.data_dir, class_cond=True, data_filter="frontal_only", test_flag=False, sample_n=16000)
         datal = th.utils.data.DataLoader(
             ds,
             batch_size=args.batch_size,
             shuffle=True)
         print('dataset is chexpert')
-        print(ds.summarize())
+        ds.summarize()
 
     logger.log("training...")
     TrainLoop(
@@ -105,7 +105,9 @@ def create_argparser():
         dataset='brats',
         result_dir='./results/',
         p_uncond=0.1,
-        guidance_scale=-1.0
+        guidance_scale=-1.0,
+        in_channels=1,
+        unet_version='v1'
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

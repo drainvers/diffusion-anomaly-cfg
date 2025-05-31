@@ -15,6 +15,123 @@ def visualize(img):
     normalized_img = (img - _min)/ (_max - _min)
     return normalized_img
 
+class VinDRDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        root_directory,
+        class_cond=True,
+        test_flag=False,
+        sample_n=None,
+        transform=None,
+    ):
+        if not root_directory:
+            raise ValueError("unspecified data directory")
+        self.directory = os.path.expanduser(root_directory)
+        self.test_flag = test_flag
+        self.class_cond = class_cond
+        self.annotations_path = os.path.join(self.directory,
+                                             "annotations/image_labels_test.csv"
+                                             if self.test_flag else
+                                             "annotations/image_labels_train.csv")
+        self.transform = transform
+        df_annotations = pd.read_csv(self.annotations_path)
+
+        if not test_flag:
+            df_annotations = self._clean_df(df_annotations)
+
+        self.local_classes = None
+        if class_cond:
+            df_annotations.loc[(df_annotations["No finding"] == 1), 'Label'] = 0 # Healthy
+            df_annotations.loc[(df_annotations["Pleural effusion"] == 1), 'Label'] = 1 # Diseased
+
+            df_annotations_healthy = df_annotations[(df_annotations["Label"] == 0)]
+            df_annotations_diseased = df_annotations[(df_annotations["Label"] == 1)]
+
+            # Sample from pleural effusion images to lower imbalance
+            if sample_n:
+                if len(df_annotations_healthy.index) > sample_n:
+                    df_annotations_healthy = df_annotations_healthy.sample(n=sample_n, random_state=1911)
+                if len(df_annotations_diseased.index) > sample_n:
+                    df_annotations_diseased = df_annotations_diseased.sample(n=sample_n, random_state=1911)
+
+            df_annotations = pd.concat([df_annotations_diseased, df_annotations_healthy]).copy(deep=True)
+
+            self.local_classes = df_annotations['Label'].to_list()
+        
+        df_annotations['Path'] = df_annotations['image_id'].apply(
+                                    lambda image_id: os.path.join(
+                                        self.directory, 
+                                        f"{'test' if test_flag else 'train'}/{image_id}.jpg")).astype(str)
+        self.local_images = df_annotations['Path'].to_list()
+
+        if class_cond:
+            assert len(self.local_images) == len(self.local_classes)
+
+
+    def __getitem__(self, idx):
+        path = self.local_images[idx]
+        basename, ext = os.path.splitext(os.path.basename(path))
+        name = basename
+        print(name)
+
+        # Readds ability to read known image formats, taken from upstream guided diffusion repo
+        if ext == '.npy':
+            out_img = np.load(path)
+        else:
+            out_img = np.asarray(Image.open(path).convert('L')) # Use Pillow for TIF support
+            out_img = np.expand_dims(out_img, axis=2) # Changes image shape to (H, W, 1)
+        
+        out_img = visualize(out_img).astype(np.float32)
+        out_img = np.transpose(out_img, [2, 0, 1]) # HWC -> CHW
+
+        out_dict = {}
+        if self.local_classes:
+            out_dict["y"] = np.array(self.local_classes[idx], dtype=np.int64)
+            out_dict["name"] = name
+        
+        if self.transform:
+            out_img = self.transform(out_img)
+
+        return out_img, out_dict
+    
+    def summarize(self):
+        print('n_images  :', len(self.local_images))
+        if self.class_cond:
+            print('n_labels  :', len(self.local_classes))
+            print('n_healthy :', len(self.local_classes) - int(sum(self.local_classes)))
+            print('n_diseased:', int(sum(self.local_classes)))
+    
+    def _clean_df(self, input_df):
+        pathology_columns = [
+            "Aortic enlargement", "Atelectasis", "Calcification", "Cardiomegaly", 
+            "Clavicle fracture", "Consolidation", "Edema", "Emphysema", "Enlarged PA", 
+            "ILD", "Infiltration", "Lung Opacity", "Lung cavity", "Lung cyst", 
+            "Mediastinal shift", "Nodule/Mass", "Pleural effusion", "Pleural thickening", 
+            "Pneumothorax", "Pulmonary fibrosis", "Rib fracture", "Other lesion", "COPD", 
+            "Lung tumor", "Pneumonia", "Tuberculosis", "Other diseases", "No finding"
+        ]
+
+        # Function to apply majority voting per group
+        def majority_vote(group):
+            # Use sum > 1 to enforce 2/3 votes for positive
+            majority = (group[pathology_columns].sum(axis=0) > 1).astype(int)
+            # If 'No finding' is 1, set all others to 0
+            if majority["No finding"] == 1:
+                for col in pathology_columns:
+                    if col != "No finding":
+                        majority[col] = 0
+            # Return as a DataFrame row with the image_id
+            majority['image_id'] = group['image_id'].iloc[0]
+            return majority
+
+        # Apply majority voting grouped by image_id
+        result_df = input_df.groupby("image_id").apply(majority_vote).reset_index(drop=True)
+
+        return result_df
+
+    def __len__(self):
+        return len(self.local_images)
+
 class ChexpertDataset(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -51,12 +168,12 @@ class ChexpertDataset(torch.utils.data.Dataset):
         self.local_classes = None
         if class_cond:
             # Generate labels for healthy images and images with pleural effusions
-            df_annotations.loc[(df_annotations["No Finding"] == 1), 'Label'] = 1 # Healthy
-            df_annotations.loc[(df_annotations["Pleural Effusion"] == 1), 'Label'] = 0 # Diseased
+            df_annotations.loc[(df_annotations["No Finding"] == 1), 'Label'] = 0 # Healthy
+            df_annotations.loc[(df_annotations["Pleural Effusion"] == 1), 'Label'] = 1 # Diseased
             df_annotations = df_annotations[df_annotations['Label'].isin([0, 1])].copy(deep=True)
 
-            df_annotations_healthy = df_annotations[(df_annotations["Label"] == 1)]
-            df_annotations_diseased = df_annotations[(df_annotations["Label"] == 0)]
+            df_annotations_healthy = df_annotations[(df_annotations["Label"] == 0)]
+            df_annotations_diseased = df_annotations[(df_annotations["Label"] == 1)]
 
             if unique_patients_only:
                 df_annotations_healthy = self._clean_df(df_annotations_healthy)
@@ -112,8 +229,8 @@ class ChexpertDataset(torch.utils.data.Dataset):
         print('n_images  :', len(self.local_images))
         if self.class_cond:
             print('n_labels  :', len(self.local_classes))
-            print('n_healthy :', int(sum(self.local_classes)))
-            print('n_diseased:', len(self.local_classes) - int(sum(self.local_classes)))
+            print('n_healthy :', len(self.local_classes) - int(sum(self.local_classes)))
+            print('n_diseased:', int(sum(self.local_classes)))
     
     def _clean_df(self, input_df):
         # Do NOT use first(), it will return the first non-NaN value, use nth to get values as-is
@@ -224,6 +341,10 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
     from matplotlib import gridspec
 
-    train_ds = ChexpertDataset('/workspace/CheXpert-v1.0', test_flag=False, unique_patients_only=True, sample_n=16569)
+    # train_ds = ChexpertDataset('/workspace/CheXpert-v1.0', class_cond=True, test_flag=False, data_filter="frontal_only")
+    # test_ds = ChexpertDataset('/workspace/CheXpert-v1.0', class_cond=True, test_flag=True, data_filter="frontal_only")
+    train_ds = VinDRDataset('/workspace/vindr_cxr_256', class_cond=True, test_flag=False)
+    test_ds = VinDRDataset('/workspace/vindr_cxr_256', class_cond=True, test_flag=True)
     # preview_dataset(train_ds, 3, 3)
     train_ds.summarize()
+    test_ds.summarize()

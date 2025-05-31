@@ -364,7 +364,6 @@ class GaussianDiffusion:
         }
   
     def _predict_xstart_from_eps(self, x_t, t, eps):
-        x_t = x_t[:, :4, ...]
         assert x_t.shape == eps.shape
         return (
             _extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t
@@ -1011,7 +1010,7 @@ class GaussianDiffusion:
         device=None,
         noise_level=500,
         progress=False,
-        eta = 0.0,
+        eta=0.0,
         guidance_scale=-1
     ):
         if device is None:
@@ -1094,7 +1093,7 @@ class GaussianDiffusion:
         reverse_kwargs["null"] = True
 
         for i in indices:
-            k=abs(time-1-i)
+            k = abs(time - 1 - i)
             t = th.tensor([k] * shape[0], device=device)
             with th.no_grad():
                 out = self.ddim_reverse_sample(
@@ -1110,9 +1109,10 @@ class GaussianDiffusion:
                 yield out
                 img = out["sample"]
 
-            if k % 20 == 0:
+            if k % 50 == 0:
                 print('k', k)
-                # viz.image(visualize(img.cpu()[0,0, ...]), opts=dict(caption="reversesample"))
+        
+        viz.image(visualize(img.cpu()[0,0, ...]), opts=dict(caption="latent"))
 
         for i in indices:
             t = th.tensor([i] * shape[0], device=device)
@@ -1132,9 +1132,9 @@ class GaussianDiffusion:
             img = out["sample"]
             saliency=out['saliency']
 
-            if i % 20 == 0:
+            if i % 50 == 0:
                 print('i', i)
-                # viz.image(visualize(img.cpu()[0,0, ...]), opts=dict(caption="interimsample"))
+                # viz.image(visualize(img.cpu()[0,0, ...]), opts=dict(caption="forwardsample"))
 
 
     def training_losses(self, model,  x_start, t, model_kwargs=None, noise=None):
@@ -1294,10 +1294,10 @@ class GaussianDiffusion:
             xstart_cond.append(out["pred_xstart"])
             xstart_null.append(out_null["pred_xstart"])
 
-            return {
-                "xstart_cond": xstart_cond,
-                "xstart_null": xstart_null
-            }
+        return {
+            "xstart_cond": xstart_cond,
+            "xstart_null": xstart_null
+        }
 
     def calc_bpd_loop(self, model, x_start, clip_denoised=True, model_kwargs=None):
         """

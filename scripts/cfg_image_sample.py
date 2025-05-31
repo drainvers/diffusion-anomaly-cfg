@@ -118,13 +118,10 @@ def main():
             number=img[1]["name"]
             org_label = img[1]["y"].to(dist_util.dev())
             
-            viz.image(visualize(img[0][0, ...]), opts=dict(caption=f"img {'healthy' if img[1]['y'] else 'diseased'} {number[0]}"))
-            print('img1', img[1])
-            print('number', number)
-            print('org y', img[1]["y"])
+            viz.image(visualize(img[0][0, ...]), opts=dict(caption=f"img {'diseased' if img[1]['y'] else 'healthy'} {number[0]}"))
 
         if args.class_cond:
-            classes = th.ones(size=(args.batch_size,), device=dist_util.dev(), dtype=th.int)
+            classes = th.zeros(size=(args.batch_size,), device=dist_util.dev(), dtype=th.int)
             model_kwargs = dict(
                 y=classes,
                 p_uncond=-1,
@@ -276,7 +273,8 @@ def create_argparser():
         num_classes=2,
         result_dir='./results',
         guidance_scale=2.0,
-        class_cond=True
+        class_cond=True,
+        unet_version='v1'
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()
