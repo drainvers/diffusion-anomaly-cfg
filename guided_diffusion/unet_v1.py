@@ -341,7 +341,6 @@ class QKVAttentionLegacy(nn.Module):
         Apply QKV attention.
 
         :param qkv: an [N x (H * 3 * C) x T] tensor of Qs, Ks, and Vs.
-        :encoder_kv: an [N x (H * 2 * C) x T] tensor of encoder Ks and Vs.
         :return: an [N x (H * C) x T] tensor after attention.
         """
         bs, width, length = qkv.shape
@@ -375,7 +374,6 @@ class QKVAttention(nn.Module):
         Apply QKV attention.
 
         :param qkv: an [N x (3 * H * C) x T] tensor of Qs, Ks, and Vs.
-        :encoder_kv: an [N x (2 * H * C) x T] tensor of encoder Ks and Vs.
         :return: an [N x (H * C) x T] tensor after attention.
         """
         bs, width, length = qkv.shape
@@ -780,8 +778,6 @@ class EncoderUNetModel(nn.Module):
         self.num_heads_upsample = num_heads_upsample
 
         time_embed_dim = model_channels * 4
-        encoder_channels = None
-
         self.time_embed = nn.Sequential(
             linear(model_channels, time_embed_dim),
             nn.SiLU(),

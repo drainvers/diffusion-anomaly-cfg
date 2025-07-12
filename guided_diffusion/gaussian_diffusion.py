@@ -1090,7 +1090,8 @@ class GaussianDiffusion:
             indices = tqdm(indices)
         
         reverse_kwargs = model_kwargs.copy()
-        reverse_kwargs["null"] = True
+        if guidance_scale != -1:
+            reverse_kwargs["null"] = True
 
         for i in indices:
             k = abs(time - 1 - i)
@@ -1111,6 +1112,7 @@ class GaussianDiffusion:
 
             if k % 50 == 0:
                 print('k', k)
+                # viz.image(visualize(img.cpu()[0,0, ...]), opts=dict(caption="forwardsample"))
         
         viz.image(visualize(img.cpu()[0,0, ...]), opts=dict(caption="latent"))
 
@@ -1134,7 +1136,7 @@ class GaussianDiffusion:
 
             if i % 50 == 0:
                 print('i', i)
-                # viz.image(visualize(img.cpu()[0,0, ...]), opts=dict(caption="forwardsample"))
+                # viz.image(visualize(img.cpu()[0,0, ...]), opts=dict(caption="reversesample"))
 
 
     def training_losses(self, model,  x_start, t, model_kwargs=None, noise=None):

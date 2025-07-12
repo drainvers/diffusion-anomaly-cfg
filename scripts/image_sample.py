@@ -15,7 +15,6 @@ import torch.distributed as dist
 
 from guided_diffusion import dist_util, logger
 from guided_diffusion.script_util import (
-    NUM_CLASSES,
     model_and_diffusion_defaults,
     create_model_and_diffusion,
     add_dict_to_argparser,
@@ -104,6 +103,7 @@ def create_argparser():
         batch_size=1,
         use_ddim=False,
         model_path="",
+        num_classes=2,
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

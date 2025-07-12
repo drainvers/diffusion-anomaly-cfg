@@ -8,6 +8,7 @@ import pandas as pd
 from scipy import ndimage
 from PIL import Image
 from textwrap import wrap
+import random
 
 def visualize(img):
     _min = img.min()
@@ -314,37 +315,131 @@ class BRATSDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.database)
 
-def preview_dataset(ds, nrow, ncol):
-    fig = plt.subplots(figsize=(nrow * 2.56, ncol * 2.56), dpi=100, layout='tight')
-    gs = gridspec.GridSpec(nrow, ncol, wspace=0.0, hspace=0.0)
+def preview_dataset(ds, nrow=6, ncol=5, save_path="preview.png"):
+    # Create the figure
+    fig = plt.figure(figsize=(ncol * 2.56, nrow * 2.56), dpi=100, layout='tight')
+    gs = gridspec.GridSpec(nrow, ncol, wspace=0.2, hspace=0.2)  # Spacing between images
 
-    for row in range(nrow):
-        for col in range(ncol):
-            im, out_dict = ds[ncol * row + col]
-            ax = plt.subplot(gs[row, col])
-            ax.imshow(np.transpose(im, [1, 2, 0]), cmap='gray', aspect='auto')
-            ax.set_xticklabels([])
-            ax.set_yticklabels([])
-            ax.tick_params(top=False, right=False, bottom=False, left=False, pad=0)
-            ax.set(frame_on=False)
-            if row == 0:
-                ax.set_xlabel('\n'.join(wrap(out_dict['name'], 20)))
-                ax.xaxis.set_label_position('top')
-            if col == 0:
-                ax.set_ylabel('\n'.join(wrap(out_dict['name'], 20)), wrap=True)
-                ax.yaxis.set_label_position('left')
-    
-    plt.tight_layout(pad=1)
-    plt.savefig('./chexpert_sample.png', dpi=100)
+    for grid_idx in range(nrow * ncol):
+        row, col = divmod(grid_idx, ncol)
+        try:
+            im, _ = ds[grid_idx]
+        except Exception:
+            im = np.ones((3, 256, 256), dtype=np.uint8) * 255
+
+        # Convert tensor to numpy and reshape if necessary
+        if torch.is_tensor(im):
+            im = im.detach().cpu().numpy()
+        if im.shape[0] in [1, 3]:  # C x H x W format
+            im = np.transpose(im, (1, 2, 0))  # H x W x C
+
+        # Clip and normalize if needed
+        im = np.clip(im, 0, 1) if im.dtype != np.uint8 else im
+
+        ax = plt.subplot(gs[row, col])
+        ax.imshow(im, cmap='gray' if im.shape[-1] == 1 else None, aspect='equal')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_frame_on(True)
+        for spine in ax.spines.values():
+            spine.set_edgecolor('black')
+            spine.set_linewidth(1)
+
+    plt.savefig(save_path, dpi=100, bbox_inches='tight')
+    plt.close(fig)
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
     from matplotlib import gridspec
 
+    # train_pa = ChexpertDataset('/workspace/CheXpert-v1.0', class_cond=True, test_flag=False, data_filter="frontal_only", frontal_mode="pa")
+    # train_ap = ChexpertDataset('/workspace/CheXpert-v1.0', class_cond=True, test_flag=False, data_filter="frontal_only", frontal_mode="ap")
     # train_ds = ChexpertDataset('/workspace/CheXpert-v1.0', class_cond=True, test_flag=False, data_filter="frontal_only")
     # test_ds = ChexpertDataset('/workspace/CheXpert-v1.0', class_cond=True, test_flag=True, data_filter="frontal_only")
-    train_ds = VinDRDataset('/workspace/vindr_cxr_256', class_cond=True, test_flag=False)
-    test_ds = VinDRDataset('/workspace/vindr_cxr_256', class_cond=True, test_flag=True)
-    # preview_dataset(train_ds, 3, 3)
-    train_ds.summarize()
-    test_ds.summarize()
+    train_ds = VinDRDataset('/workspace/vindr_cxr_256', class_cond=False, test_flag=False)
+    # test_ds = VinDRDataset('/workspace/vindr_cxr_256', class_cond=True, test_flag=True)
+    preview_dataset(train_ds, 5, 6, 'vindr_preview.png')
+
+    # import blobfile as bf
+    # from torch.utils.data import DataLoader, Dataset
+
+    # def visualize(img):
+    #     _min = img.min()
+    #     _max = img.max()
+    #     normalized_img = (img - _min)/ (_max - _min)
+    #     return normalized_img
+
+    # class ImageDataset(Dataset):
+    #     def __init__(
+    #         self,
+    #         resolution,
+    #         image_paths,
+    #         classes=None,
+    #         shard=0,
+    #         num_shards=1,
+    #         random_crop=False,
+    #         random_flip=False
+    #     ):
+    #         super().__init__()
+    #         self.resolution = resolution
+    #         self.local_images = image_paths[shard:][::num_shards]
+    #         self.local_classes = None if classes is None else classes[shard:][::num_shards]
+    #         self.random_crop = random_crop
+    #         self.random_flip = random_flip
+
+    #     def __len__(self):
+    #         print('len',  len(self.local_images))
+    #         return len(self.local_images)
+
+    #     def __getitem__(self, idx):
+    #         path = self.local_images[idx]
+    #         # name=str(path).split("/")[-1].split(".")[0]
+    #         name, ext = os.path.splitext(os.path.basename(path))
+    #         print('name', name)
+
+    #         # Readds ability to read known image formats, taken from upstream guided diffusion repo
+    #         if ext == '.npy':
+    #             numpy_img = np.load(path)
+    #         else:
+    #             numpy_img = np.asarray(Image.open(path).convert('L')) # Use Pillow for TIF support
+    #             # numpy_img = cv2.resize(numpy_img, (256, 256), interpolation=cv2.INTER_AREA)
+    #             numpy_img = np.expand_dims(numpy_img, axis=2) # Changes image shape to (W, H, 1)
+    #         arr = visualize(numpy_img).astype(np.float32)
+
+    #         out_dict = {}
+    #         if self.local_classes is not None:
+    #             out_dict["y"] = np.array(self.local_classes[idx], dtype=np.int64)
+    #             out_dict["name"]=name
+
+    #         return np.transpose(arr, [2, 0, 1]), out_dict # HWC -> CHW
+
+    # def _list_image_files_recursively(data_dir):
+    #     results = []
+    #     for entry in sorted(bf.listdir(data_dir)):
+    #         full_path = bf.join(data_dir, entry)
+    #         ext = os.path.splitext(os.path.basename(full_path))[1]
+    #         if ext.lower() in [".jpg", ".jpeg", ".png", ".tiff", ".tif", ".npy"]:
+    #             results.append(full_path)
+    #         elif bf.isdir(full_path):
+    #             results.extend(_list_image_files_recursively(full_path))
+    #     results = sorted(results)
+    #     return results
+    
+    # all_files = _list_image_files_recursively('../data/tif_pleural/')
+    # class_names =[path.split("/")[-2] for path in all_files] #9 or 3
+    # sorted_classes = {x: i for i, x in enumerate(sorted(set(class_names), reverse=True))}
+    # if len(sorted_classes) == 1 and sorted_classes.get('diseased') == 0:
+    #         sorted_classes['diseased'] = 1
+    # print('sorted_classes', sorted_classes)
+    # classes = [sorted_classes[x] for x in class_names]
+
+    # dataset = ImageDataset(
+    #     256,
+    #     all_files,
+    #     classes=classes,
+    #     shard=0,
+    #     num_shards=1,
+    #     random_crop=False,
+    #     random_flip=False,
+    # )
+    # preview_dataset(dataset, 3, 4, 'tif_pleural_preview.png')

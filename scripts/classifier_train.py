@@ -267,7 +267,9 @@ def create_argparser():
         eval_interval=1000,
         save_interval=5000,
         dataset='brats',
-        result_dir="./results"
+        result_dir="results/",
+        in_channels=1,
+        out_channels=2
     )
     defaults.update(classifier_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

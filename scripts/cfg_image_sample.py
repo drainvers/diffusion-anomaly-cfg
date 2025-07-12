@@ -55,14 +55,13 @@ def main():
             ds,
             batch_size=args.batch_size,
             shuffle=False)
-    
+
     elif args.dataset=='chexpert':
-        # ds = ChexpertDataset(args.data_dir, class_cond=True, test_flag=True)
-        # datal = th.utils.data.DataLoader(
+        # ds = ChexpertDataset(args.data_dir, class_cond=True, test_flag=True, data_filter="frontal_only")
+        # data = th.utils.data.DataLoader(
         #     ds,
         #     batch_size=args.batch_size,
         #     shuffle=True)
-        # datal = iter(datal)
         data = load_data(
             data_dir=args.data_dir,
             batch_size=args.batch_size,
@@ -84,6 +83,14 @@ def main():
     p1 = np.array([np.array(p.shape).prod() for p in model.parameters()]).sum()
     print('pmodel', p1)
     logger.log('pmodel', p1)
+
+    summary(model, input_data={
+        'x': th.randn(size=(args.batch_size, 1, 256, 256), device=dist_util.dev()),
+        'timesteps': diffusion._scale_timesteps(th.randint(0, 1, (args.batch_size,), device=dist_util.dev()).long()),
+        'y':  th.zeros(size=(args.batch_size,), device=dist_util.dev(), dtype=th.int),
+        'p_uncond': -1,
+        'clf_free': True
+    })
 
     def model_fn(x, t, y=None, p_uncond=-1, null=False, clf_free=True):
         assert y is not None
@@ -119,6 +126,8 @@ def main():
             org_label = img[1]["y"].to(dist_util.dev())
             
             viz.image(visualize(img[0][0, ...]), opts=dict(caption=f"img {'diseased' if img[1]['y'] else 'healthy'} {number[0]}"))
+            print('img1', img[1])
+            print('number', number)
 
         if args.class_cond:
             classes = th.zeros(size=(args.batch_size,), device=dist_util.dev(), dtype=th.int)
@@ -151,6 +160,7 @@ def main():
 
 
         print('time for 1000', start.elapsed_time(end))
+        logger.log('time for 1000', start.elapsed_time(end))
 
         if args.dataset=='brats':
             viz.image(visualize(sample[0,0, ...]), opts=dict(caption="sampled output0"))
@@ -174,36 +184,13 @@ def main():
             sampled_img = (np.concatenate((np.array(visualize(sample[0, ...]).cpu()).transpose(1, 2, 0),) * 3, axis=-1) * 255).astype(np.uint8)
             heatmap_img = (colored_diff * 255).astype(np.uint8)
 
-            # thresh = threshold_otsu(visualize(diff))
-            # logger.log(f'threshold: {thresh}')
-            # mask = th.where(th.tensor(visualize(diff)) > 0.5, 1, 0)  #this is our predicted binary segmentation
-            # viz.image(visualize(mask), opts=dict(caption=f'mask {img[1]["name"][0]}'))
-
-            # Convert mask to boxes
-            # obj_ids = th.unique(mask)
-            # obj_ids = obj_ids[1:]
-            # masks = mask == obj_ids[:, None, None]
-
-            # boxes = masks_to_boxes(masks)
-            # drawn_boxes = draw_bounding_boxes((img[0][0, ...] * 255).type(th.uint8).repeat(3, 1, 1), boxes, colors="red")
-            # fig, _ = show(drawn_boxes)
-            # viz.image(drawn_boxes, opts=dict(caption=f'bbox {img[1]["name"][0]}'))
-
-            # Image.fromarray((np.array(visualize(mask).cpu()) * 255).astype(np.uint8)).save(f'results/{args.data_dir.split("/")[-1]}/mask_{img[1]["name"][0]}.png')
-
-            # Image.fromarray(heatmap_img).save(f'results/heatmap_{img[1]["name"][0]}.png')
-            # Image.fromarray(sampled_img).save(f'results/sampled_{img[1]["name"][0]}.png')
-
-            # mask = (np.array(mask.cpu().repeat(3, 1, 1)).transpose(1, 2, 0) * 255).astype(np.uint8)
-            # drawn_boxes = np.array(drawn_boxes.cpu()).transpose(1, 2, 0).astype(np.uint8)
-
             result = np.hstack([original_img,
                                 sampled_img,
                                 heatmap_img])
             all_results.append(result)
-            all_names.append(img[1]["name"][0])
-
             # End of save image
+        
+        all_names.append(img[1]["name"][0])
 
         gathered_samples = [th.zeros_like(sample) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_samples, sample)  # gather not supported with NCCL
@@ -247,8 +234,8 @@ def main():
     if dist.get_rank() == 0:
         os.makedirs(args.result_dir, exist_ok=True)
         shape_str = "x".join([str(x) for x in arr.shape])
-        # out_path = os.path.join(logger.get_dir(), f"samples_{shape_str}.npz")
-        out_path = os.path.join(args.result_dir, f"samples_{os.path.splitext(os.path.basename(args.model_path))[0]}_{shape_str}.npz")
+        out_path = os.path.join(logger.get_dir(), f"samples_{shape_str}.npz")
+        # out_path = os.path.join(args.result_dir, f"noise_{args.noise_level}_gs_{args.guidance_scale}_{os.path.splitext(os.path.basename(args.model_path))[0]}_{shape_str}.npz")
         logger.log(f"saving to {out_path}")
         np.savez(out_path, samples=arr, org_labels=org_label_arr, tgt_labels=tgt_label_arr, names=name_arr, orgs=org_arr)
         

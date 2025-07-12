@@ -4,6 +4,7 @@ Train a diffusion model on images.
 import sys
 import argparse
 import torch as th
+import numpy as np
 sys.path.append("..")
 sys.path.append(".")
 from guided_diffusion.bratsloader import BRATSDataset, ChexpertDataset
@@ -33,6 +34,10 @@ def main():
     model.to(dist_util.dev())
     schedule_sampler = create_named_schedule_sampler(args.schedule_sampler, diffusion,  maxt=1000)
 
+    p1 = np.array([np.array(p.shape).prod() for p in model.parameters()]).sum()
+    print('pmodel', p1)
+    logger.log('pmodel', p1)
+
     logger.log("creating data loader...")
 
     if args.dataset == 'brats':
@@ -43,18 +48,13 @@ def main():
             shuffle=True)
 
     elif args.dataset == 'chexpert':
-        ds = ChexpertDataset(args.data_dir, class_cond=True, test_flag=False)
+        ds = ChexpertDataset(args.data_dir, class_cond=True, data_filter="frontal_only", test_flag=False, sample_n=16000)
         datal = th.utils.data.DataLoader(
             ds,
             batch_size=args.batch_size,
             shuffle=True)
-        # datal = load_data(
-        #     data_dir=args.data_dir,
-        #     batch_size=args.batch_size,
-        #     image_size=args.image_size,
-        #     class_cond=True,
-        # )
         print('dataset is chexpert')
+        ds.summarize()
 
     logger.log("training...")
     TrainLoop(
@@ -73,7 +73,9 @@ def main():
         schedule_sampler=schedule_sampler,
         weight_decay=args.weight_decay,
         lr_anneal_steps=args.lr_anneal_steps,
-        dataset=args.dataset
+        dataset=args.dataset,
+        p_uncond=args.p_uncond,
+        guidance_scale=args.guidance_scale
     ).run_loop()
 
 
@@ -93,7 +95,12 @@ def create_argparser():
         use_fp16=False,
         fp16_scale_growth=1e-3,
         dataset='brats',
-        result_dir='./results/'
+        result_dir='results/',
+        clf_free=False,
+        p_uncond=-1,
+        guidance_scale=-1.0,
+        in_channels=1,
+        unet_version='v1'
     )
     defaults.update(model_and_diffusion_defaults())
     parser = argparse.ArgumentParser()

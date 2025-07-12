@@ -238,7 +238,7 @@ def create_classifier_and_diffusion(
     rescale_timesteps,
     rescale_learned_sigmas,
     in_channels=1,
-    out_channels=1000,
+    out_channels=2,
     unet_version='v1'
 ):
     print('timestepresp2', timestep_respacing)
@@ -277,8 +277,8 @@ def create_classifier(
     classifier_use_scale_shift_norm,
     classifier_resblock_updown,
     classifier_pool,
-    in_channels=3,
-    out_channels=1000,
+    in_channels=1,
+    out_channels=2,
     unet_version='v1'
 ):
     if image_size == 512:
@@ -323,7 +323,6 @@ def create_classifier(
         pool=classifier_pool,
     )
 
-'''
 def sr_model_and_diffusion_defaults():
     res = model_and_diffusion_defaults()
     res["large_size"] = 256
@@ -357,7 +356,8 @@ def sr_create_model_and_diffusion(
     use_scale_shift_norm,
     resblock_updown,
     use_fp16,
-    in_channels
+    in_channels,
+    unet_version='v1'
 ):
     print('timestepresp3', timestep_respacing)
     model = sr_create_model(
@@ -376,7 +376,8 @@ def sr_create_model_and_diffusion(
         dropout=dropout,
         resblock_updown=resblock_updown,
         use_fp16=use_fp16,
-        in_channels=in_channels
+        in_channels=in_channels,
+        unet_version=unet_version
     )
     diffusion = create_gaussian_diffusion(
         steps=diffusion_steps,
@@ -407,7 +408,8 @@ def sr_create_model(
     dropout,
     resblock_updown,
     use_fp16,
-    in_channels
+    in_channels,
+    unet_version
 ):
     _ = small_size  # hack to prevent unused variable
 
@@ -423,6 +425,13 @@ def sr_create_model(
     attention_ds = []
     for res in attention_resolutions.split(","):
         attention_ds.append(large_size // int(res))
+    
+    if unet_version == 'v1':
+        from .unet_v1 import SuperResModel
+    elif unet_version == 'v2':
+        from .unet_v2 import SuperResModel
+    else:
+        raise ValueError(f"invalid unet version: {unet_version}")
     
     if in_channels == 1 or in_channels == 4:
         out_channels = in_channels if not learn_sigma else in_channels * 2
@@ -449,7 +458,6 @@ def sr_create_model(
         resblock_updown=resblock_updown,
         use_fp16=use_fp16,
     )
-'''
 
 def create_gaussian_diffusion(
     *,
