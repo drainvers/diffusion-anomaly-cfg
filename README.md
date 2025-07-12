@@ -6,7 +6,32 @@ This is a fork of the PyTorch implementation of the code for ["Diffusion Models 
 
 We trained the model on the [CheXpert dataset](https://stanfordmlgroup.github.io/competitions/chexpert/) and evaluated on an externally provided anonymized test set of 11 images with known signs of pleural effusion. A small example of the directory structure for the dataset can be found in the folder *data*. To train or evaluate on the desired dataset, set `--dataset chexpert` and specify the directory. An additional `ChexpertDataset` class has been implemented to allow working with the CheXpert-v1.0 directory structure directly, simply comment the `load_data()` call and use the `ChexpertDataset` class insead. If using this class, please specify the root folder of the dataset, and set the train-test flag in the class initialization. If using `load_data()`, directly set the path to the `training` folder for training or the `testing` folder for evaluation.
 
-We include a preprocessing script to downsize images to 256x256. Annotations are kept mostly as-is with changes to the extension in the image path to match our downsized image format. Label filtering is performed in the ChexpertDataset class for splitting into training and testing sets. The separation of data into "healthy" and "diseased" images is done with Pandas, where healthy data is defined as `df["No Finding"] == 1` and diseased as `df["Pleural Effusion"] == 1`. We sample 16,000 images for each class.
+The default directory structure used by load_data is as follows
+
+```
+data
+┗━━━chexpert
+    ┣━━━training
+    ┃   ┃━━━healthy
+    ┃   ┃   ┣━━━xxx1.png
+    ┃   ┃   ┣━━━xxx2.png
+    ┃   ┃   ┗━━━...
+    ┃   ┗━━━diseased
+    ┃       ┣━━━xxx1.png
+    ┃       ┣━━━xxx2.png
+    ┃       ┗━━━...
+    ┗━━━testing
+        ┣━━━healthy
+        ┃   ┣━━━xxx1.png
+        ┃   ┣━━━xxx2.png
+        ┃   ┗━━━...
+        ┗━━━diseased
+            ┃━━━xxx1.png
+            ┣━━━xxx2.png
+            ┗━━━...
+```
+
+We include a preprocessing script `chexpert_preproc.py` to downsize images to 256x256. Annotations are kept mostly as-is with changes to the extension in the image path to match our downsized image format. The directory structure after preprocessing is maintained from the original. Label filtering is performed in the `ChexpertDataset` class for splitting into training and testing sets. However, if using the default `load_data()`, filtering code is provided in this script. The separation of data into "healthy" and "diseased" images is done with Pandas, where healthy data is defined as `df["No Finding"] == 1` and diseased as `df["Pleural Effusion"] == 1`. The filtering criteria can be seen in `bratsloader.py`. We sample 16,000 images for each class.
 
 ## Usage
 
@@ -19,7 +44,7 @@ SAMPLE_FLAGS="--batch_size 1 --num_samples 11 --timestep_respacing ddim1000 --us
 ```
 To train the diffusion model, run
 ```
-python scripts/cfg_image_train.py --data_dir --data_dir path_to_traindata --dataset chexpert $MODEL_FLAGS $DIFFUSION_FLAGS $TRAIN_FLAGS
+python scripts/cfg_image_train.py --data_dir --data_dir path_to_traindata --dataset chexpert --lr_anneal_steps 50000 $MODEL_FLAGS $DIFFUSION_FLAGS $TRAIN_FLAGS
 ```
 The model will be saved in the *results* folder (can be changed through the `--result_dir` argument).
 
@@ -38,10 +63,12 @@ Our deblurring component follows the implementation in this [repository](https:/
 ### FixedPoint-GAN
 
 We follow the implementation given in this [repository](https://github.com/mahfuzmohammad/Fixed-Point-GAN). We choose the following hyperparameters:
+
 - λ<sub>cls</sub>=1
 - λ<sub>gp</sub>=λ<sub>id</sub>=λ<sub>rec</sub>=10
 - g_conv_dim=128
 - g_repeat_num=14
+
 and train our model for 50000 iterations. The batch size is set to 4, and the learning rate to 10<sup>-4</sup>.
 
 ### DDIM with classifier guidance
