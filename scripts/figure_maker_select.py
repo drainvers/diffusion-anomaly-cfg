@@ -70,11 +70,26 @@ def dice_score(pred, targs):
     # pred = (pred > 0).float()
     return 2. * (pred * targs).sum() / (pred + targs).sum()
 
+def load_selected_samples(npz_path, filter_indices=None):
+    original_data = load_samples(npz_path)
+    if filter_indices is None:
+        return original_data
+    else:
+        data = {
+            'originals': np.take(original_data['originals'], filter_indices, axis=0),
+            'samples': np.take(original_data['samples'], filter_indices, axis=0),
+            'org_labels': np.take(original_data['org_labels'], filter_indices, axis=0),
+            'tgt_labels': np.take(original_data['tgt_labels'], filter_indices, axis=0),
+            'names': np.take(original_data['names'], filter_indices, axis=0)
+        }
+
+        return data
+
 def load_samples(npz_path):
     samples_npz = np.load(npz_path, allow_pickle=True)
-    # name_num = [int(x.split()[1]) for x in samples_npz.f.names]
-    # sorting_indices = np.argsort(name_num)
-    sorting_indices = np.argsort(samples_npz.f.names)
+    name_num = [int(x.split()[1]) for x in samples_npz.f.names]
+    sorting_indices = np.argsort(name_num)
+    # sorting_indices = np.argsort(samples_npz.f.names)
 
     normalized_originals = np.array([visualize(img) for img in samples_npz.f.orgs[sorting_indices]])
     normalized_samples = np.array([visualize(img) for img in samples_npz.f.samples[sorting_indices]])
@@ -86,14 +101,6 @@ def load_samples(npz_path):
         'tgt_labels': samples_npz.f.tgt_labels[sorting_indices],
         'names': samples_npz.f.names[sorting_indices]
     }
-
-    # data_filtered = {
-    #     'samples': np.take(data['samples'], [3, 4, 6, 8], axis=0),
-    #     'org_labels': np.take(data['org_labels'], [3, 4, 6, 8], axis=0),
-    #     'tgt_labels': np.take(data['tgt_labels'], [3, 4, 6, 8], axis=0),
-    #     'names': np.take(data['names'], [3, 4, 6, 8], axis=0),
-    #     'originals': np.take(data['originals'], [3, 4, 6, 8], axis=0)
-    # }
 
     return data
 
@@ -150,6 +157,59 @@ def get_conf_matrix(seg_mask, gt_mask):
 
     return dict(TP=TP, TN=TN, FP=FP, FN=FN)
 
+def compute_roc_auc(npz_path, gt_mask_dir):
+    data = load_samples(npz_path)
+
+    gt_masks = []
+    for i, name in enumerate(data["names"]):
+        try:
+            gt_mask_img = Image.open(f'{gt_mask_dir}/{name}_Pleural Effusion_mask.png')
+        except FileNotFoundError:
+            # print('mask not found')
+            gt_mask_img = Image.new('1', data["originals"][i].squeeze().shape)
+        gt_mask = np.array(gt_mask_img, dtype=np.uint8) / 255
+        gt_masks.append(gt_mask)
+    gt_masks = np.array(gt_masks)
+
+    diff = np.abs(data["originals"] - data["samples"])
+    diff = np.array([visualize(x) for x in diff])
+
+    all_scores = diff.reshape(-1)
+    all_labels = gt_masks.reshape(-1).astype(int)
+
+    fpr, tpr, _ = roc_curve(all_labels, all_scores)
+    roc_auc = auc(fpr, tpr)
+    return fpr, tpr, roc_auc
+
+def calculate_plot_auroc(npz_paths, model_names, gt_mask_dir):
+    fpr_list = []
+    tpr_list = []
+    auc_list = []
+    color_list = ["darkorange", "seagreen", "royalblue"]
+    for npz_path in npz_paths:
+        fpr, tpr, roc_auc = compute_roc_auc(npz_path, gt_mask_dir)
+        fpr_list.append(fpr)
+        tpr_list.append(tpr)
+        auc_list.append(roc_auc)
+
+    # Step 5: Plot ROC curve
+    plt.figure(figsize=(6.5, 5.5))
+    
+    for i in range(len(fpr_list)):
+        plt.plot(fpr_list[i], tpr_list[i], color=color_list[i], lw=2, label=f"{model_names[i]} AUROC = {auc_list[i]:.4f}")
+    
+    plt.plot([0, 1], [0, 1], color='gray', linestyle='--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("Pixel-level ROC Curve (External Test Set)")
+    plt.legend(loc="lower right")
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(f"{args.result_dir}/roc_curve_plot_{args.img_filename}.png")
+    plt.close()
+
 def calculate_metric_scores(input_images, target_images, names, include_iou=False):
     '''
     Inputs:
@@ -197,59 +257,6 @@ def calculate_metric_scores(input_images, target_images, names, include_iou=Fals
             ssim=ssim.compute(),
             fid=fid.compute(),
             )
-
-def compute_roc_auc(npz_path, gt_mask_dir):
-    data = load_samples(npz_path)
-
-    gt_masks = []
-    for i, name in enumerate(data["names"]):
-        try:
-            gt_mask_img = Image.open(f'{gt_mask_dir}/{name}_Pleural Effusion_mask.png')
-        except FileNotFoundError:
-            # print('mask not found')
-            gt_mask_img = Image.new('1', data["originals"][i].squeeze().shape)
-        gt_mask = np.array(gt_mask_img, dtype=np.uint8) / 255
-        gt_masks.append(gt_mask)
-    gt_masks = np.array(gt_masks)
-
-    diff = np.abs(data["originals"] - data["samples"])
-    diff = np.array([visualize(x) for x in diff])
-
-    all_scores = diff.reshape(-1)
-    all_labels = gt_masks.reshape(-1).astype(int)
-
-    fpr, tpr, _ = roc_curve(all_labels, all_scores)
-    roc_auc = auc(fpr, tpr)
-    return fpr, tpr, roc_auc
-
-def calculate_plot_auroc(npz_paths, model_names, gt_mask_dir):
-    fpr_list = []
-    tpr_list = []
-    auc_list = []
-    color_list = ["darkorange", "seagreen", "royalblue"]
-    for npz_path in npz_paths:
-        fpr, tpr, roc_auc = compute_roc_auc(npz_path, gt_mask_dir)
-        fpr_list.append(fpr)
-        tpr_list.append(tpr)
-        auc_list.append(roc_auc)
-
-    # Step 5: Plot ROC curve
-    plt.figure(figsize=(6.5, 5.5))
-    
-    for i in range(len(fpr_list)):
-        plt.plot(fpr_list[i], tpr_list[i], color=color_list[i], lw=2, label=f"{model_names[i]} AUROC = {auc_list[i]:.4f}")
-    
-    plt.plot([0, 1], [0, 1], color='gray', linestyle='--')
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title("Pixel-level ROC Curve (CheXpert Validation)")
-    plt.legend(loc="lower right")
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(f"{args.result_dir}/roc_curve_plot_{args.img_filename}.png")
-    plt.close()
 
 def cam_to_segmentation(cam_mask, threshold=np.nan, smoothing=False, k=0):
     """
@@ -496,7 +503,7 @@ def generate_diff(original, reconstructed):
     colored_diff = cm(diff)[:, :, :3] # Remove alpha channel
     return colored_diff.transpose(2, 0, 1) # HWC -> CHW
 
-def generate_grid_for_mpl(npz_paths, dest_path='', x_labels=None, generate_masks=False):
+def generate_grid_for_mpl(npz_paths, filter_indices=None, dest_path='', x_labels=None, generate_masks=False):
     master_image = None
     master_samples = []
     master_diffs = []
@@ -511,7 +518,7 @@ def generate_grid_for_mpl(npz_paths, dest_path='', x_labels=None, generate_masks
         col_attr_length = len(npz_paths) * 2 + 1
 
     for i, path in enumerate(npz_paths):
-        sample_data = load_samples(path)
+        sample_data = load_selected_samples(path, filter_indices=filter_indices)
 
         if i == 0:
             batch_size = len(sample_data['names'])
@@ -586,31 +593,26 @@ def generate_grid_for_mpl(npz_paths, dest_path='', x_labels=None, generate_masks
             if row == 0:
                 ax.set_xlabel(x_labels[col], wrap=True, fontdict=fontdict)
                 ax.xaxis.set_label_position('top')
-            # if col == 0:
-            #     ax.set_ylabel(y_labels.tolist()[row].split('_')[0], wrap=True, fontdict=fontdict)
-            #     if y_label_colors.tolist()[row] == 1:
-            #         ax.yaxis.label.set_color('red')
-            #     ax.yaxis.set_label_position('left')
-    
+
     plt.tight_layout(pad=1)
     plt.savefig(os.path.join(dest_path, f"{args.img_filename}_mpl.png"), dpi=100)
     plt.close()
 
-def generate_metrics(npz_paths, include_iou=False):
+def generate_metrics(npz_paths, filter_indices=None, include_iou=False):
     results = []
     for i, path in enumerate(npz_paths): # This is a column
-        sample_data = load_samples(path)
+        sample_data = load_selected_samples(path, filter_indices=filter_indices)
         results.append(calculate_metric_scores(sample_data['originals'], sample_data['samples'], sample_data['names'], include_iou=include_iou))
     return results
 
-def generate_master_image(npz_paths, generate_masks=False):
+def generate_master_image(npz_paths, filter_indices=None, generate_masks=False):
     master_image = None
     master_samples = []
     master_diffs = []
     master_overlays = []
 
     for i, path in enumerate(npz_paths): # This is a column
-        sample_data = load_samples(path)
+        sample_data = load_selected_samples(path, filter_indices=filter_indices)
 
         if i == 0:
             master_image = np.concatenate(np.repeat(sample_data['originals'], 3, axis=1), axis=1)
@@ -906,13 +908,13 @@ def main():
         # generate_case_comparison_mpl(args.npz_paths, dest_path=args.result_dir, y_labels=args.model_labels, generate_masks=args.include_miou, data_idx=args.data_idx)
 
         if args.split_size == 0:
-            generate_grid_for_mpl(args.npz_paths, dest_path=args.result_dir, x_labels=large_grid_labels, generate_masks=args.include_miou)
+            generate_grid_for_mpl(args.npz_paths, filter_indices=args.filter_indices, dest_path=args.result_dir, x_labels=large_grid_labels, generate_masks=args.include_miou)
         else:
             assert args.split_size > 0
             split_generate_grid_for_mpl(args.npz_paths, dest_path=args.result_dir, x_labels=large_grid_labels, generate_masks=args.include_miou, split_size=args.split_size)
 
         if args.split_size == 0:
-            final_image = generate_master_image(args.npz_paths, generate_masks=args.include_miou)
+            final_image = generate_master_image(args.npz_paths, filter_indices=args.filter_indices, generate_masks=args.include_miou)
             final_image = (final_image.transpose(1, 2, 0) * 255).astype(np.uint8)
             Image.fromarray(final_image).save(os.path.join(args.result_dir, f"{args.img_filename}.png"))
         else:
@@ -921,9 +923,7 @@ def main():
                 image = (image.transpose(1, 2, 0) * 255).astype(np.uint8)
                 Image.fromarray(image).save(os.path.join(args.result_dir, f"{args.img_filename}_{i:02d}.png"))
 
-    final_metrics = generate_metrics(args.npz_paths, args.include_miou)
-
-    calculate_plot_auroc(args.npz_paths, args.model_labels, args.gt_mask_path)
+    final_metrics = generate_metrics(args.npz_paths, filter_indices=args.filter_indices, include_iou=args.include_miou)
 
     if args.include_miou:
         print(f'Model,PSNR,SSIM,FID,mIoU,Sensitivity,Specificity')
@@ -943,6 +943,8 @@ def main():
             csvfile.write(f'Model,PSNR,SSIM,FID\n')
             for scenario, metric in zip(scenarios, final_metrics):
                 csvfile.write(f"{scenario},{metric['psnr'].item():02.3f},{metric['ssim'].item():02.3f},{metric['fid'].item():02.3f}\n")
+    
+    calculate_plot_auroc(args.npz_paths, args.model_labels, args.gt_mask_path)
 
 def create_argparser():
     parser = argparse.ArgumentParser()
@@ -957,6 +959,7 @@ def create_argparser():
     parser.add_argument(f"--csv_filename", type=str, default="metrics.csv")
     parser.add_argument(f"--data_idx", type=int, required=False)
     parser.add_argument(f"--split_size", type=int, default=0)
+    parser.add_argument(f"--filter_indices", required=False, type=int, nargs='+')
     return parser
 
 if __name__ == '__main__':
